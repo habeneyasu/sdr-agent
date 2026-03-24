@@ -1,2 +1,2 @@
-"""External integration placeholders."""
+"""External integration helpers."""
 

@@ -3,6 +3,7 @@
 from typing import Protocol
 
 from sdr_agent.config import AppConfig
+from sdr_agent.integrations.openai_provider import OpenAIProvider
 from sdr_agent.schemas import WebSearchPlan
 
 PLANNER_INSTRUCTIONS = (
@@ -24,6 +25,7 @@ class OpenAIPlannerResearchAgent:
 
     def __init__(self, config: AppConfig) -> None:
         self._config = config
+        self._provider = OpenAIProvider(config)
         self._agent = self._build_agent()
 
     def _build_agent(self) -> object:
@@ -34,7 +36,7 @@ class OpenAIPlannerResearchAgent:
                 "OpenAI Agents SDK is required. Install with: pip install openai-agents"
             ) from exc
 
-        model = self._config.planner_model or "gpt-4o-mini"
+        model = self._provider.resolve_model(self._config.planner_model or "gpt-4o-mini")
         return Agent(
             name="PlannerAgent",
             instructions=PLANNER_INSTRUCTIONS,
