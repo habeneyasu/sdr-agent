@@ -3,6 +3,7 @@
 from typing import Protocol
 
 from sdr_agent.config import AppConfig
+from sdr_agent.integrations.openai_provider import OpenAIProvider
 from sdr_agent.schemas import ReportData
 
 EMAIL_INSTRUCTIONS = (
@@ -24,6 +25,7 @@ class OpenAIEmailAgent:
 
     def __init__(self, config: AppConfig) -> None:
         self._config = config
+        self._provider = OpenAIProvider(config)
         self._agent = self._build_agent()
 
     def _build_agent(self) -> object:
@@ -59,7 +61,7 @@ class OpenAIEmailAgent:
             client.client.mail.send.post(request_body=message)
             return "success"
 
-        model = self._config.email_model or "gpt-4o-mini"
+        model = self._provider.resolve_model(self._config.email_model or "gpt-4o-mini")
         return Agent(
             name="EmailAgent",
             instructions=EMAIL_INSTRUCTIONS,

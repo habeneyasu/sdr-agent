@@ -1,2 +1,2 @@
-"""UI layer placeholders."""
+"""UI layer package."""
 

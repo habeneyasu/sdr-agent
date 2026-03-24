@@ -1,9 +1,11 @@
 """Orchestration for the deep-research multi-agent workflow."""
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 
 from sdr_agent.agents.email_agent import EmailAgent, OpenAIEmailAgent
+from sdr_agent.agents.guardrails import BasicDeepResearchGuardrails, DeepResearchGuardrailsAgent
 from sdr_agent.agents.planner_agent import OpenAIPlannerResearchAgent, PlannerResearchAgent
 from sdr_agent.agents.search_agent import OpenAISearchAgent, SearchAgent
 from sdr_agent.agents.writer_agent import OpenAIWriterResearchAgent, WriterResearchAgent
@@ -21,19 +23,31 @@ class ResearchManager:
         searcher: SearchAgent | None = None,
         writer: WriterResearchAgent | None = None,
         emailer: EmailAgent | None = None,
+        guardrails: DeepResearchGuardrailsAgent | None = None,
     ) -> None:
         self._config = config or AppConfig()
         self._planner = planner or OpenAIPlannerResearchAgent(self._config)
         self._searcher = searcher or OpenAISearchAgent(self._config)
         self._writer = writer or OpenAIWriterResearchAgent(self._config)
         self._emailer = emailer or OpenAIEmailAgent(self._config)
+        self._guardrails = guardrails or BasicDeepResearchGuardrails()
 
     async def run(self, query: str) -> AsyncIterator[str]:
         """Stream progress updates and final markdown report."""
-        trace_link = self._build_trace_link()
+        trace_context, trace_link = self._build_trace_context()
         if trace_link:
             yield trace_link
 
+        if trace_context is None:
+            async for chunk in self._execute_pipeline(query):
+                yield chunk
+            return
+
+        with trace_context:
+            async for chunk in self._execute_pipeline(query):
+                yield chunk
+
+    async def _execute_pipeline(self, query: str) -> AsyncIterator[str]:
         yield "Planning searches..."
         search_plan = await self.plan_searches(query)
 
@@ -42,6 +56,10 @@ class ResearchManager:
 
         yield "Writing report..."
         report = await self.write_report(query, search_results)
+        report = await self._guardrails.validate_report(report)
+
+        preview = self._build_email_preview(report)
+        yield preview
 
         yield "Sending email..."
         await self.send_email(report)
@@ -79,12 +97,32 @@ class ResearchManager:
             return None
 
     @staticmethod
-    def _build_trace_link() -> str | None:
-        """Build OpenAI trace link when Agents SDK tracing helpers are available."""
+    def _build_trace_context() -> tuple[object | None, str | None]:
+        """Build optional trace context and trace link."""
+        # OpenAI trace export expects an OpenAI API key. When running on OpenRouter
+        # credentials, skip trace creation to avoid noisy non-fatal 401 errors.
+        base_url = (os.getenv("OPENAI_BASE_URL") or "").lower()
+        api_key = os.getenv("OPENAI_API_KEY") or ""
+        if "openrouter.ai" in base_url or api_key.startswith("sk-or-v1"):
+            return None, None
+
         try:
-            from agents import gen_trace_id
+            from agents import gen_trace_id, trace
         except ImportError:
-            return None
+            return None, None
 
         trace_id = gen_trace_id()
-        return f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}"
+        trace_link = f"View trace: https://platform.openai.com/traces/trace?trace_id={trace_id}"
+        return trace("Research trace", trace_id=trace_id), trace_link
+
+    @staticmethod
+    def _build_email_preview(report: ReportData) -> str:
+        """Return a UI-friendly email preview snippet before sending."""
+        subject = report.short_summary.strip().split(".")[0][:90] or "Research Update"
+        body_preview = report.markdown_report.strip()[:500]
+        return (
+            "### Email Preview\n"
+            f"**Subject:** {subject}\n\n"
+            f"{body_preview}\n\n"
+            "_Preview truncated before send._"
+        )
